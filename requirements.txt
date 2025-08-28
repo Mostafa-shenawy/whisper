@@ -6,4 +6,6 @@ tiktoken
 numpy
 # Pin a CPU-only torch wheel to shrink size and avoid GPU deps:
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.3.1+cpu
+torch
+torchaudio
+pydantic
