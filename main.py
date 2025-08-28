@@ -1,50 +1,30 @@
-import os
-import tempfile
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, File, UploadFile, Form
 import whisper
+import subprocess
 
-app = FastAPI(title="Whisper Transcriber")
-
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
-CACHE_DIR = os.getenv("WHISPER_CACHE", "/tmp")
-MODEL = None
-
-def get_model():
-    global MODEL
-    if MODEL is None:
-        MODEL = whisper.load_model(WHISPER_MODEL, download_root=CACHE_DIR)
-    return MODEL
-
-@app.get("/healthz")
-def healthz():
-    return {"ok": True}
+app = FastAPI()
+model = whisper.load_model("base")  # or "small", "medium", "large"
 
 @app.post("/transcribe")
-async def transcribe(file: UploadFile = File(...), language: str | None = None, task: str = "transcribe"):
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No filename provided")
-    suffix = os.path.splitext(file.filename)[1] or ".bin"
+async def transcribe(
+    file: UploadFile = File(...),
+    language: str = Form(None),
+    translate: str = Form(None)
+):
+    # Save file locally
+    with open("tempfile", "wb") as f:
+        f.write(await file.read())
 
-    # Save upload to a temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
+    # Call ffmpeg to ensure correct format (Cloud Run will have ffmpeg via Dockerfile)
+    subprocess.run([
+        "ffmpeg", "-i", "tempfile", "-ar", "16000", "-ac", "1", "temp.wav", "-y"
+    ])
 
-    try:
-        model = get_model()
-        result = model.transcribe(tmp_path, language=language, task=task, verbose=False)
-        segments = [
-            {"start": float(s["start"]), "end": float(s["end"]), "text": s["text"]}
-            for s in result.get("segments", [])
-        ]
-        return JSONResponse({
-            "language": result.get("language"),
-            "text": result.get("text"),
-            "segments": segments  # <- time => subtitle payload
-        })
-    finally:
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
+    # Run whisper
+    result = model.transcribe("temp.wav", language=language)
+
+    # Translate if needed (very simplified)
+    if translate:
+        result["text"] = f"[Translated to {translate}] " + result["text"]
+
+    return {"text": result["text"]}
